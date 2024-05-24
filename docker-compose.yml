@@ -1,28 +1,26 @@
 # For more information: https://laravel.com/docs/sail
-version: '3'
 services:
   traefik:
-    image: traefik:v2.9
+    image: traefik:v3.0.1
     container_name: traefik-rl
     command:
-#      - "--api.debug=true"
-#      - "--log.level=DEBUG"
       - "--api.insecure=true"
       - "--providers.docker=true"
-#      - "--entryPoints.sail.address=:80"
+      - "--providers.docker.exposedbydefault=true"
+      - "--providers.docker.network=proxy"
     ports:
       - "80:80"
       - "8080:8080"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-    networks:
-      - sail
     labels:
-      - 'traefik.http.middlewares.headersrl.headers.accesscontrolallowmethods=*'
-      - 'traefik.http.middlewares.headersrl.headers.accesscontrolallowheaders=*'
-      - 'traefik.http.middlewares.headersrl.headers.accesscontrolalloworiginlist=*'
-      - 'traefik.http.middlewares.headersrl.headers.accesscontrolmaxage=100'
-      - 'traefik.http.middlewares.headersrl.headers.addvaryheader=true'
+      - "traefik.http.middlewares.headersrl.headers.accesscontrolallowmethods=*"
+      - "traefik.http.middlewares.headersrl.headers.accesscontrolallowheaders=*"
+      - "traefik.http.middlewares.headersrl.headers.accesscontrolalloworiginlist=*"
+      - "traefik.http.middlewares.headersrl.headers.accesscontrolmaxage=100"
+      - "traefik.http.middlewares.headersrl.headers.addvaryheader=true"
+    networks:
+      - proxy
   laravel:
     container_name: laravel-rl
     build:
@@ -31,23 +29,50 @@ services:
       args:
         WWWGROUP: '${WWWGROUP}'
     ports:
-      - '${APP_PORT:-80}:80'
+      - '${APP_PORT:-8000}:80'
     environment:
       WWWUSER: '${WWWUSER}'
       LARAVEL_SAIL: 1
     volumes:
       - '${LARAVEL_PATH}:/var/www/html'
-    networks:
-      - sail
     depends_on:
       - mysql
       - redis
       - traefik
     labels:
-      - 'traefik.enable=true'
-      - 'traefik.http.routers.laravel.rule=(Host(`app.localhost`) && PathPrefix(`/api/v2`))'
-#      - 'traefik.docker.network=sail'
-      - 'traefik.http.routers.laravel.middlewares=headersrl'
+      - "traefik.enable=true"
+      - "traefik.http.routers.laravel.rule=Host(`app.localhost`) && (PathPrefix(`/api/v2`) || PathPrefix(`/admin`))"
+      - "traefik.docker.network=proxy"
+#      - "traefik.http.routers.laravel.middlewares=headersrl"
+    networks:
+      - sail
+      - proxy
+  nuxt:
+    container_name: nuxt-rl
+    working_dir: /usr/src/app
+    environment:
+      - CHOKIDAR_USEPOLLING=true
+      - NODE_ENV=development
+    build:
+      context: '${NUXT_PATH}'
+      dockerfile: 'Dockerfile'
+    ports:
+      - '${WEB_PORT:-3000}:3000'
+    volumes:
+      - '${NUXT_PATH}:/usr/src/app'
+      - "/usr/src/app/node_modules"
+      - "/usr/src/app/.nuxt"
+    restart: always
+    depends_on:
+      - traefik
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.nuxt.rule=Host(`app.localhost`)"
+      - "traefik.docker.network=proxy"
+#      - "traefik.http.routers.nuxt.middlewares=headersrl"
+    networks:
+      - sail
+      - proxy
   mysql:
     container_name: mysql-rl
     image: 'mysql:8.0'
@@ -61,14 +86,14 @@ services:
       MYSQL_ALLOW_EMPTY_PASSWORD: 'yes'
     volumes:
       - 'sailmysql:/var/lib/mysql'
-    networks:
-      - sail
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-p${DB_PASSWORD}"]
       retries: 3
       timeout: 5s
     labels:
-      - traefik.enable=false
+      - "traefik.enable=false"
+    networks:
+      - sail
   redis:
     container_name: redis-rl
     image: 'redis:alpine'
@@ -76,38 +101,18 @@ services:
       - '${FORWARD_REDIS_PORT:-6379}:6379'
     volumes:
       - 'sailredis:/data'
-    networks:
-      - sail
     healthcheck:
       test: [ "CMD", "redis-cli", "ping" ]
       retries: 3
       timeout: 5s
     labels:
-      - traefik.enable=false
-  nuxt:
-    container_name: nuxt-rl
-    build:
-      context: './front'
-      dockerfile: Dockerfile
-      args:
-        WWWGROUP: '${WWWGROUP}'
-    ports:
-      - '${WEB_PORT:-3000}:3000'
-    volumes:
-      - '${NUXT_PATH}:/app'
+      - "traefik.enable=false"
     networks:
       - sail
-    restart: always
-    depends_on:
-      - laravel
-      - traefik
-    labels:
-      - 'traefik.enable=true'
-      - 'traefik.http.routers.nuxt.rule=Host(`app.localhost`)'
-#      - 'traefik.docker.network=sail'
-      - 'traefik.http.routers.nuxt.middlewares=headersrl'
 networks:
   sail:
+    driver: bridge
+  proxy:
     driver: bridge
 volumes:
   sailmysql:
